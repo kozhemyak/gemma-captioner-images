@@ -10,8 +10,8 @@ import io
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration, BitsAndBytesConfig
 
 # ===== USER MODIFIABLE SETTINGS =====
-# Model to use (e.g., google/gemma-3-4b-it, google/gemma-3-12b-it, google/gemma-3-27b-it)
-MODEL_ID = "unsloth/gemma-3-27b-pt"
+# Model to use - using the official Google model
+MODEL_ID = "google/gemma-3-4b-it"
 
 # Prompt for image captioning - modify this to change what kind of captions you get
 CAPTION_PROMPT = "Provide a short, single-line description of this image for training data."
@@ -60,24 +60,45 @@ print("Model and processor loaded and ready for inference")
 def caption_image(image_data, prompt=CAPTION_PROMPT, max_new_tokens=256):
     """Generate a caption for the given image."""
     try:
-        # Instead of using messages with the template, create direct inputs
-        # This is a workaround for the chat template issue
-        text_inputs = processor.tokenizer(prompt, return_tensors="pt").to(model.device)
+        # Create messages for the model with custom prompt
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image", "image": image_data}
+                ]
+            }
+        ]
         
-        # Process the image separately 
-        image_inputs = processor.image_processor(image_data, return_tensors="pt").to(model.device)
+        # Process inputs
+        inputs = processor.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt"
+        )
         
-        # Generate caption directly using the processed inputs
+        # Move inputs to device
+        inputs = {k: v.to(model.device) for k, v in inputs.items()}
+        
+        # Track input length to extract only new tokens
+        input_len = inputs["input_ids"].shape[-1]
+        
+        # Generate caption
         with torch.inference_mode():
             outputs = model.generate(
-                **text_inputs,
-                images=image_inputs.pixel_values,
+                **inputs,
                 max_new_tokens=max_new_tokens,
                 do_sample=False
             )
         
-        # Decode the caption, starting after the input tokens
-        caption = processor.tokenizer.decode(outputs[0][text_inputs.input_ids.shape[1]:], skip_special_tokens=True)
+        # Extract only the newly generated tokens
+        generated_tokens = outputs[0][input_len:]
+        
+        # Decode the caption
+        caption = processor.decode(generated_tokens, skip_special_tokens=True)
         
         # Ensure caption is a single line
         caption = caption.replace('\n', ' ').strip()
