@@ -17,6 +17,30 @@ MODEL_ID = "unsloth/gemma-3-27b-pt"
 CAPTION_PROMPT = "Provide a short, single-line description of this image for training data."
 # =====================================
 
+# Define a default chat template for Gemma 3
+GEMMA_CHAT_TEMPLATE = """<bos><start_of_turn>user
+{% for message in messages %}
+{% if message['role'] == 'user' %}
+{% if message['content'] is string %}
+{{ message['content'] }}
+{% else %}
+{% for content in message['content'] %}
+{% if content['type'] == 'text' %}
+{{ content['text'] }}
+{% elif content['type'] == 'image' %}
+<image>
+{% endif %}
+{% endfor %}
+{% endif %}
+{% elif message['role'] == 'assistant' %}
+{{ message['content'] }}
+{% elif message['role'] == 'system' %}
+{{ message['content'] }}
+{% endif %}
+{% endfor %}
+<end_of_turn>
+<start_of_turn>model"""
+
 # Set up Hugging Face token from environment variable 
 HF_TOKEN = os.environ.get("HF_TOKEN", None)
 
@@ -49,6 +73,11 @@ try:
     
     processor = AutoProcessor.from_pretrained(MODEL_ID, **token_param)
     
+    # Explicitly set chat template 
+    if not hasattr(processor, 'chat_template') or not processor.chat_template:
+        print("Chat template not found, setting default Gemma 3 template")
+        processor.chat_template = GEMMA_CHAT_TEMPLATE
+    
     print(f"Model loaded on {device}")
 except Exception as e:
     if not HF_TOKEN:
@@ -71,13 +100,14 @@ def caption_image(image_data, prompt=CAPTION_PROMPT, max_new_tokens=256):
             }
         ]
         
-        # Process inputs
+        # Process inputs - now with explicit chat template
         inputs = processor.apply_chat_template(
             messages,
             add_generation_prompt=True,
             tokenize=True,
             return_dict=True,
-            return_tensors="pt"
+            return_tensors="pt",
+            chat_template=GEMMA_CHAT_TEMPLATE
         )
         
         # Move inputs to device
@@ -191,5 +221,3 @@ def handler(job):
 
 # Start the serverless function
 runpod.serverless.start({"handler": handler})
-
-#update 
