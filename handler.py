@@ -17,30 +17,6 @@ MODEL_ID = "unsloth/gemma-3-27b-pt"
 CAPTION_PROMPT = "Provide a short, single-line description of this image for training data."
 # =====================================
 
-# Define a default chat template for Gemma 3
-GEMMA_CHAT_TEMPLATE = """<bos><start_of_turn>user
-{% for message in messages %}
-{% if message['role'] == 'user' %}
-{% if message['content'] is string %}
-{{ message['content'] }}
-{% else %}
-{% for content in message['content'] %}
-{% if content['type'] == 'text' %}
-{{ content['text'] }}
-{% elif content['type'] == 'image' %}
-<image>
-{% endif %}
-{% endfor %}
-{% endif %}
-{% elif message['role'] == 'assistant' %}
-{{ message['content'] }}
-{% elif message['role'] == 'system' %}
-{{ message['content'] }}
-{% endif %}
-{% endfor %}
-<end_of_turn>
-<start_of_turn>model"""
-
 # Set up Hugging Face token from environment variable 
 HF_TOKEN = os.environ.get("HF_TOKEN", None)
 
@@ -73,11 +49,6 @@ try:
     
     processor = AutoProcessor.from_pretrained(MODEL_ID, **token_param)
     
-    # Explicitly set chat template 
-    if not hasattr(processor, 'chat_template') or not processor.chat_template:
-        print("Chat template not found, setting default Gemma 3 template")
-        processor.chat_template = GEMMA_CHAT_TEMPLATE
-    
     print(f"Model loaded on {device}")
 except Exception as e:
     if not HF_TOKEN:
@@ -89,46 +60,24 @@ print("Model and processor loaded and ready for inference")
 def caption_image(image_data, prompt=CAPTION_PROMPT, max_new_tokens=256):
     """Generate a caption for the given image."""
     try:
-        # Create messages for the model with custom prompt
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image", "image": image_data}
-                ]
-            }
-        ]
+        # Instead of using messages with the template, create direct inputs
+        # This is a workaround for the chat template issue
+        text_inputs = processor.tokenizer(prompt, return_tensors="pt").to(model.device)
         
-        # Process inputs - now with explicit chat template
-        inputs = processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-            chat_template=GEMMA_CHAT_TEMPLATE
-        )
+        # Process the image separately 
+        image_inputs = processor.image_processor(image_data, return_tensors="pt").to(model.device)
         
-        # Move inputs to device
-        inputs = {k: v.to(model.device) for k, v in inputs.items()}
-        
-        # Track input length to extract only new tokens
-        input_len = inputs["input_ids"].shape[-1]
-        
-        # Generate caption
+        # Generate caption directly using the processed inputs
         with torch.inference_mode():
             outputs = model.generate(
-                **inputs,
+                **text_inputs,
+                images=image_inputs.pixel_values,
                 max_new_tokens=max_new_tokens,
                 do_sample=False
             )
         
-        # Extract only the newly generated tokens
-        generated_tokens = outputs[0][input_len:]
-        
-        # Decode the caption
-        caption = processor.decode(generated_tokens, skip_special_tokens=True)
+        # Decode the caption, starting after the input tokens
+        caption = processor.tokenizer.decode(outputs[0][text_inputs.input_ids.shape[1]:], skip_special_tokens=True)
         
         # Ensure caption is a single line
         caption = caption.replace('\n', ' ').strip()
