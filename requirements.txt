@@ -1,0 +1,19 @@
+# Core RunPod package
+runpod>=1.2.0
+
+# Torch and related packages
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Hugging Face Transformers with Gemma 3 support
+git+https://github.com/huggingface/transformers@v4.50.0-Gemma-3
+
+# BitsAndBytes for quantization
+bitsandbytes>=0.40.0
+
+# Image processing
+Pillow>=9.5.0
+requests>=2.28.0
+
+# Dependencies for accelerate
+accelerate>=0.20.0
