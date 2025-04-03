@@ -6,7 +6,7 @@ torch>=2.0.0
 torchvision>=0.15.0
 
 # Hugging Face Transformers with Gemma 3 support
-git+https://github.com/huggingface/transformers@v4.50.0-Gemma-3
+transformers>=4.50.0
 
 # BitsAndBytes for quantization
 bitsandbytes>=0.40.0
