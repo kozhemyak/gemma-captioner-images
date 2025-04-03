@@ -10,11 +10,15 @@ import io
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration, BitsAndBytesConfig
 
 # ===== USER MODIFIABLE SETTINGS =====
-# Model to use - using the official Google model
-MODEL_ID = "google/gemma-3-4b-it"
+# Get model ID from environment variable with fallback to default
+MODEL_ID = os.environ.get("MODEL_ID", "google/gemma-3-4b-it")
 
 # Prompt for image captioning - modify this to change what kind of captions you get
-CAPTION_PROMPT = "Provide a short, single-line description of this image for training data."
+CAPTION_PROMPT = os.environ.get("CAPTION_PROMPT", 
+                               "Provide a short, single-line description of this image for training data.")
+
+# Maximum tokens to generate with fallback to default
+MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", "256"))
 # =====================================
 
 # Set up Hugging Face token from environment variable 
@@ -22,6 +26,8 @@ HF_TOKEN = os.environ.get("HF_TOKEN", None)
 
 # Load the model once at startup, outside of the handler
 print(f"Loading model: {MODEL_ID}")
+print(f"Default caption prompt: {CAPTION_PROMPT}")
+print(f"Default max tokens: {MAX_NEW_TOKENS}")
 
 # Configure token parameters if provided
 if HF_TOKEN:
@@ -57,7 +63,7 @@ except Exception as e:
 
 print("Model and processor loaded and ready for inference")
 
-def caption_image(image_data, prompt=CAPTION_PROMPT, max_new_tokens=256):
+def caption_image(image_data, prompt=CAPTION_PROMPT, max_new_tokens=MAX_NEW_TOKENS):
     """Generate a caption for the given image."""
     try:
         # Create messages for the model with custom prompt
@@ -128,7 +134,7 @@ def handler(job):
     
     # Get the prompt (optional, use default if not provided)
     prompt = job_input.get("prompt", CAPTION_PROMPT)
-    max_new_tokens = job_input.get("max_new_tokens", 256)
+    max_new_tokens = job_input.get("max_new_tokens", MAX_NEW_TOKENS)
     
     # Handle the image (base64, URL, or file path)
     image_input = job_input["image"]
