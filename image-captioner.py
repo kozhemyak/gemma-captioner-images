@@ -13,10 +13,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 # ===== USER MODIFIABLE SETTINGS =====
 # Your RunPod endpoint ID
-ENDPOINT_ID = "ct2uzploqjakqv"
+ENDPOINT_ID = "YOUR_ENDPOINT_ID"
 
 # Your RunPod API key
-API_KEY = "rpa_YLYPRMRJI7AHU3LZ0GL9Z4QHNE3NW90XZNS8E5UC1w3z4y"
+API_KEY = "YOUR_API_KEY"
 
 # Maximum concurrent requests
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "5"))
