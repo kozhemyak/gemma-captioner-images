@@ -19,25 +19,30 @@ ENDPOINT_ID = "YOUR_ENDPOINT_ID"
 API_KEY = "YOUR_API_KEY"
 
 # Maximum concurrent requests
-MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "5"))
+MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "1"))
 
 # Polling interval in seconds for async requests
 POLLING_INTERVAL = int(os.environ.get("POLLING_INTERVAL", "2"))
+
+# Prompt for image captioning - modify this to change what kind of captions you get
+CAPTION_PROMPT = os.environ.get("CAPTION_PROMPT", "Provide a description of the provided image, writing several sentences and giving a very fleshed out description.")
+
+# Maximum tokens to generate with fallback to default
+MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "512"))
+
 # =====================================
 
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='RunPod Image Captioning Client')
-    parser.add_argument('--image_folder', type=str, required=True, 
-                        help='Path to folder containing images')
-    parser.add_argument('--endpoint_id', type=str, default=ENDPOINT_ID,
-                        help=f'RunPod endpoint ID (default: {ENDPOINT_ID})')
-    parser.add_argument('--api_key', type=str, default=API_KEY,
-                        help='RunPod API key')
-    parser.add_argument('--concurrent', type=int, default=MAX_CONCURRENT,
-                        help='Maximum number of concurrent requests')
-    parser.add_argument('--sync', action='store_true',
-                        help='Use synchronous requests instead of async')
+
+    parser.add_argument('--image_folder', type=str, required=True, help='Path to folder containing images')
+    parser.add_argument('--endpoint_id', type=str, default=ENDPOINT_ID, help=f'RunPod endpoint ID')
+    parser.add_argument('--api_key', type=str, default=API_KEY, help='RunPod API key')
+    parser.add_argument('--concurrent', type=int, default=MAX_CONCURRENT, help='Maximum number of concurrent requests')
+    parser.add_argument('--caption_prompt', type=str, default=CAPTION_PROMPT, help='Prompt for image captioning')
+    parser.add_argument('--max_tokens', type=int, default=MAX_TOKENS, help='Maximum tokens to generate')
+    
     return parser.parse_args()
 
 def encode_image_to_base64(image_path):
@@ -78,7 +83,9 @@ def send_request_sync(image_path, args):
         }
         payload = {
             "input": {
-                "image": base64_image
+                "image": base64_image,
+                "prompt": args.caption_prompt,
+                "max_tokens": args.max_tokens
             }
         }
         
@@ -100,81 +107,6 @@ def send_request_sync(image_path, args):
             f.write(result['output']['caption'])
         
         print(f"Caption saved to {output_path}")
-        
-    except Exception as e:
-        print(f"Error processing {image_path}: {str(e)}")
-
-def send_request_async(image_path, args):
-    """Send an asynchronous request to the RunPod API and poll for results."""
-    try:
-        image_name = os.path.basename(image_path)
-        print(f"Processing {image_name}...")
-        
-        # Encode image
-        base64_image = encode_image_to_base64(image_path)
-        if not base64_image:
-            return
-        
-        # Prepare API request for async operation - only send the image
-        url = f"https://api.runpod.ai/v2/{args.endpoint_id}/run"
-        headers = {
-            "Authorization": f"Bearer {args.api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "input": {
-                "image": base64_image
-            }
-        }
-        
-        # Send request
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        result = response.json()
-        
-        job_id = result.get('id')
-        if not job_id:
-            print(f"Error: No job ID returned for {image_name}")
-            return
-        
-        # Poll for results
-        status_url = f"https://api.runpod.ai/v2/{args.endpoint_id}/status/{job_id}"
-        
-        while True:
-            time.sleep(POLLING_INTERVAL)
-            status_response = requests.get(status_url, headers=headers)
-            status_response.raise_for_status()
-            status_data = status_response.json()
-            
-            status = status_data.get('status')
-            
-            if status == 'COMPLETED':
-                # Save caption
-                image_base = os.path.splitext(image_path)[0]
-                output_path = f"{image_base}.txt"
-                
-                caption = status_data.get('output', {}).get('caption')
-                if caption:
-                    with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(caption)
-                    print(f"Caption saved to {output_path}")
-                else:
-                    print(f"No caption received for {image_name}")
-                break
-            
-            elif status == 'FAILED':
-                print(f"Job failed for {image_name}: {status_data.get('error')}")
-                break
-            
-            elif status == 'CANCELLED':
-                print(f"Job cancelled for {image_name}")
-                break
-            
-            elif status == 'IN_QUEUE' or status == 'IN_PROGRESS':
-                print(f"Job status for {image_name}: {status}")
-            
-            else:
-                print(f"Unknown status for {image_name}: {status}")
         
     except Exception as e:
         print(f"Error processing {image_path}: {str(e)}")
@@ -208,7 +140,7 @@ def main():
     print(f"Found {len(image_files)} images to process")
     
     # Process images
-    request_fn = send_request_sync if args.sync else send_request_async
+    request_fn = send_request_sync
     
     with ThreadPoolExecutor(max_workers=args.concurrent) as executor:
         futures = [executor.submit(request_fn, image_path, args) for image_path in image_files]

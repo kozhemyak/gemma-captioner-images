@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Handler for RunPod Serverless Gemma 3 Image Captioning
+# Handler for RunPod Serverless
 
 import os
 import runpod
@@ -13,21 +13,21 @@ from transformers import AutoProcessor, Gemma3ForConditionalGeneration, BitsAndB
 # Get model ID from environment variable with fallback to default
 MODEL_ID = os.environ.get("MODEL_ID", "google/gemma-3-4b-it")
 
-# Prompt for image captioning - modify this to change what kind of captions you get
-CAPTION_PROMPT = os.environ.get("CAPTION_PROMPT", 
-                               "Provide a short, single-line description of this image for training data.")
-
-# Maximum tokens to generate with fallback to default
-MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", "256"))
-# =====================================
+# Path to the network volume (mounted in RunPod)
+NETWORK_VOLUME_PATH = os.environ.get("NETWORK_VOLUME_PATH", "/runpod-volume")
+HF_CACHE_DIR = os.path.join(NETWORK_VOLUME_PATH, "hf_cache")
+os.makedirs(HF_CACHE_DIR, exist_ok=True)
 
 # Set up Hugging Face token from environment variable 
 HF_TOKEN = os.environ.get("HF_TOKEN", None)
 
+# Configure Hugging Face cache directory
+os.environ["TRANSFORMERS_CACHE"] = HF_CACHE_DIR
+os.environ["HF_HOME"] = HF_CACHE_DIR
+os.environ["HF_DATASETS_CACHE"] = HF_CACHE_DIR
+
 # Load the model once at startup, outside of the handler
 print(f"Loading model: {MODEL_ID}")
-print(f"Default caption prompt: {CAPTION_PROMPT}")
-print(f"Default max tokens: {MAX_NEW_TOKENS}")
 
 # Configure token parameters if provided
 if HF_TOKEN:
@@ -50,10 +50,15 @@ try:
         torch_dtype=dtype,
         device_map="auto" if torch.cuda.is_available() else None,
         quantization_config=quantization_config,
+        cache_dir=HF_CACHE_DIR,  # Use the custom cache directory
         **token_param,
     ).eval()
     
-    processor = AutoProcessor.from_pretrained(MODEL_ID, **token_param)
+    processor = AutoProcessor.from_pretrained(
+        MODEL_ID,
+        cache_dir=HF_CACHE_DIR,  # Use the custom cache directory
+        **token_param,
+    )
     
     print(f"Model loaded on {device}")
 except Exception as e:
@@ -63,7 +68,7 @@ except Exception as e:
 
 print("Model and processor loaded and ready for inference")
 
-def caption_image(image_data, prompt=CAPTION_PROMPT, max_new_tokens=MAX_NEW_TOKENS):
+def caption_image(image_data, prompt, max_new_tokens):
     """Generate a caption for the given image."""
     try:
         # Create messages for the model with custom prompt
@@ -115,7 +120,6 @@ def caption_image(image_data, prompt=CAPTION_PROMPT, max_new_tokens=MAX_NEW_TOKE
         traceback_str = traceback.format_exc()
         return f"Error processing image: {str(e)}\n{traceback_str}"
 
-
 def handler(job):
     """
     This is the handler function that will be called by the serverless worker.
@@ -133,8 +137,8 @@ def handler(job):
         return {"error": "No image provided in input"}
     
     # Get the prompt (optional, use default if not provided)
-    prompt = job_input.get("prompt", CAPTION_PROMPT)
-    max_new_tokens = job_input.get("max_new_tokens", MAX_NEW_TOKENS)
+    prompt = job_input.get("prompt")
+    max_new_tokens = job_input.get("max_tokens")
     
     # Handle the image (base64, URL, or file path)
     image_input = job_input["image"]
@@ -194,8 +198,5 @@ def handler(job):
         error_trace = traceback.format_exc()
         return {"error": f"Error processing image: {str(e)}", "traceback": error_trace}
 
-
 # Start the serverless function
 runpod.serverless.start({"handler": handler})
-
-#test
