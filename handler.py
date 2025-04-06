@@ -8,7 +8,6 @@ from PIL import Image
 import base64
 import io
 from transformers import AutoProcessor, LlavaForConditionalGeneration
-from transformers import BitsAndBytesConfig
 
 # ===== USER MODIFIABLE SETTINGS =====
 # Get model ID from environment variable with fallback to default
@@ -38,12 +37,6 @@ else:
     token_param = {}
     print("No Hugging Face token provided (this will only work for non-gated models)")
 
-# Configure quantization
-quantization_config = BitsAndBytesConfig(
-    load_in_8bit=True,  # Use 8-bit quantization
-    llm_int8_threshold=6.0,  # Threshold for outlier detection
-)
-
 # Load the model
 dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -53,7 +46,6 @@ try:
         MODEL_ID,
         torch_dtype=dtype,
         device_map="auto" if torch.cuda.is_available() else None,
-        quantization_config=quantization_config,  # Add quantization config
         cache_dir=HF_CACHE_DIR,  # Use the custom cache directory
         **token_param,
     ).eval()
@@ -93,7 +85,7 @@ def caption_image(image_data, prompt, max_new_tokens):
         
         # Process inputs
         inputs = processor(text=[convo_string], images=[image_data], return_tensors="pt").to(device)
-        inputs['pixel_values'] = inputs['pixel_values'].to(dtype)  # Ensure pixel values match dtype
+        inputs = {k: v.to(dtype) if torch.is_floating_point(v) else v for k, v in inputs.items()}  # Ensure correct dtype
         
         # Track input length to extract only new tokens
         input_len = inputs["input_ids"].shape[-1]
