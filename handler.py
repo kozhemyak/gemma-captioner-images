@@ -7,11 +7,12 @@ import torch
 from PIL import Image
 import base64
 import io
-from transformers import AutoProcessor, Gemma3ForConditionalGeneration, BitsAndBytesConfig
+from transformers import AutoProcessor, LlavaForConditionalGeneration
+from transformers import BitsAndBytesConfig
 
 # ===== USER MODIFIABLE SETTINGS =====
 # Get model ID from environment variable with fallback to default
-MODEL_ID = os.environ.get("MODEL_ID", "google/gemma-3-4b-it")
+MODEL_ID = os.environ.get("MODEL_ID", "fancyfeast/llama-joycaption-alpha-two-hf-llava")
 
 # Path to the network volume (mounted in RunPod)
 NETWORK_VOLUME_PATH = os.environ.get("NETWORK_VOLUME_PATH", "/runpod-volume")
@@ -38,18 +39,21 @@ else:
     print("No Hugging Face token provided (this will only work for non-gated models)")
 
 # Configure quantization
-quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+quantization_config = BitsAndBytesConfig(
+    load_in_8bit=True,  # Use 8-bit quantization
+    llm_int8_threshold=6.0,  # Threshold for outlier detection
+)
 
 # Load the model
 dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 try:
-    model = Gemma3ForConditionalGeneration.from_pretrained(
+    model = LlavaForConditionalGeneration.from_pretrained(
         MODEL_ID,
         torch_dtype=dtype,
         device_map="auto" if torch.cuda.is_available() else None,
-        quantization_config=quantization_config,
+        quantization_config=quantization_config,  # Add quantization config
         cache_dir=HF_CACHE_DIR,  # Use the custom cache directory
         **token_param,
     ).eval()
@@ -71,45 +75,47 @@ print("Model and processor loaded and ready for inference")
 def caption_image(image_data, prompt, max_new_tokens):
     """Generate a caption for the given image."""
     try:
-        # Create messages for the model with custom prompt
-        messages = [
+        # Build the conversation
+        convo = [
+            {
+                "role": "system",
+                "content": "You are a helpful image captioner.",
+            },
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image", "image": image_data}
-                ]
-            }
+                "content": prompt,
+            },
         ]
         
-        # Process inputs
-        inputs = processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt"
-        )
+        # Format the conversation
+        convo_string = processor.apply_chat_template(convo, tokenize=False, add_generation_prompt=True)
+        assert isinstance(convo_string, str)
         
-        # Move inputs to device
-        inputs = {k: v.to(model.device) for k, v in inputs.items()}
+        # Process inputs
+        inputs = processor(text=[convo_string], images=[image_data], return_tensors="pt").to(device)
+        inputs['pixel_values'] = inputs['pixel_values'].to(dtype)  # Ensure pixel values match dtype
         
         # Track input length to extract only new tokens
         input_len = inputs["input_ids"].shape[-1]
         
         # Generate caption
         with torch.inference_mode():
-            outputs = model.generate(
+            generate_ids = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                do_sample=False
-            )
+                do_sample=True,
+                suppress_tokens=None,
+                use_cache=True,
+                temperature=0.6,
+                top_k=None,
+                top_p=0.9,
+            )[0]
         
-        # Extract only the newly generated tokens
-        generated_tokens = outputs[0][input_len:]
+        # Trim off the prompt
+        generate_ids = generate_ids[input_len:]
         
         # Decode the caption
-        caption = processor.decode(generated_tokens, skip_special_tokens=True)
+        caption = processor.tokenizer.decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
         
         # Ensure caption is a single line
         caption = caption.replace('\n', ' ').strip()
@@ -127,7 +133,7 @@ def handler(job):
     {
         "image": "base64 encoded image or URL",
         "prompt": "Optional custom prompt for captioning",
-        "max_new_tokens": 256  # Optional, defaults to 256
+        "max_new_tokens": 300  # Optional, defaults to 300
     }
     """
     job_input = job["input"]
@@ -137,8 +143,8 @@ def handler(job):
         return {"error": "No image provided in input"}
     
     # Get the prompt (optional, use default if not provided)
-    prompt = job_input.get("prompt")
-    max_new_tokens = job_input.get("max_tokens")
+    prompt = job_input.get("prompt", "Write a long descriptive caption for this image in a formal tone.")
+    max_new_tokens = job_input.get("max_new_tokens", 300)
     
     # Handle the image (base64, URL, or file path)
     image_input = job_input["image"]
