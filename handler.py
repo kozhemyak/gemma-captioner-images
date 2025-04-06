@@ -8,20 +8,20 @@ from PIL import Image
 import base64
 import io
 from transformers import AutoProcessor, LlavaForConditionalGeneration
+from datetime import datetime
+from colorama import init, Fore, Style
+
+# Инициализация colorama
+init(autoreset=True)
 
 # ===== USER MODIFIABLE SETTINGS =====
-# Get model ID from environment variable with fallback to default
 MODEL_ID = os.environ.get("MODEL_ID", "fancyfeast/llama-joycaption-alpha-two-hf-llava")
-
-# Path to the network volume (mounted in RunPod)
 NETWORK_VOLUME_PATH = os.environ.get("NETWORK_VOLUME_PATH", "/runpod-volume")
 HF_CACHE_DIR = os.path.join(NETWORK_VOLUME_PATH, "hf_cache")
 os.makedirs(HF_CACHE_DIR, exist_ok=True)
 
-# Set up Hugging Face token from environment variable 
 HF_TOKEN = os.environ.get("HF_TOKEN", None)
 
-# Configure Hugging Face cache directory
 os.environ["TRANSFORMERS_CACHE"] = HF_CACHE_DIR
 os.environ["HF_HOME"] = HF_CACHE_DIR
 os.environ["HF_DATASETS_CACHE"] = HF_CACHE_DIR
@@ -29,15 +29,11 @@ os.environ["HF_DATASETS_CACHE"] = HF_CACHE_DIR
 # Load the model once at startup, outside of the handler
 print(f"Loading model: {MODEL_ID}")
 
-# Configure token parameters if provided
 if HF_TOKEN:
     token_param = {"token": HF_TOKEN}
-    print("Using configured Hugging Face token from environment variable")
 else:
     token_param = {}
-    print("No Hugging Face token provided (this will only work for non-gated models)")
 
-# Load the model
 dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -46,13 +42,13 @@ try:
         MODEL_ID,
         torch_dtype=dtype,
         device_map="auto" if torch.cuda.is_available() else None,
-        cache_dir=HF_CACHE_DIR,  # Use the custom cache directory
+        cache_dir=HF_CACHE_DIR,
         **token_param,
     ).eval()
     
     processor = AutoProcessor.from_pretrained(
         MODEL_ID,
-        cache_dir=HF_CACHE_DIR,  # Use the custom cache directory
+        cache_dir=HF_CACHE_DIR,
         **token_param,
     )
     
@@ -63,6 +59,17 @@ except Exception as e:
     raise e
 
 print("Model and processor loaded and ready for inference")
+
+def log_message(message, level="INFO"):
+    """Log messages with timestamp, level, and color."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    level_colors = {
+        "INFO": Fore.GREEN,
+        "WARNING": Fore.YELLOW,
+        "ERROR": Fore.RED,
+    }
+    color = level_colors.get(level.upper(), Fore.WHITE)
+    print(f"{Fore.CYAN}[{timestamp}] {color}[{level}] {message}{Style.RESET_ALL}")
 
 def caption_image(image_data, prompt, max_new_tokens):
     """Generate a caption for the given image."""
@@ -85,10 +92,11 @@ def caption_image(image_data, prompt, max_new_tokens):
         
         # Process inputs
         inputs = processor(text=[convo_string], images=[image_data], return_tensors="pt").to(device)
-        inputs = {k: v.to(dtype) if torch.is_floating_point(v) else v for k, v in inputs.items()}  # Ensure correct dtype
+        inputs = {k: v.to(dtype) if torch.is_floating_point(v) else v for k, v in inputs.items()}
         
-        # Track input length to extract only new tokens
-        input_len = inputs["input_ids"].shape[-1]
+        # Debugging: Log input types
+        log_message(f"Input IDs dtype: {inputs['input_ids'].dtype}", level="INFO")
+        log_message(f"Pixel values dtype: {inputs['pixel_values'].dtype}", level="INFO")
         
         # Generate caption
         with torch.inference_mode():
@@ -104,19 +112,18 @@ def caption_image(image_data, prompt, max_new_tokens):
             )[0]
         
         # Trim off the prompt
-        generate_ids = generate_ids[input_len:]
+        generate_ids = generate_ids[inputs['input_ids'].shape[-1]:]
         
         # Decode the caption
         caption = processor.tokenizer.decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-        
-        # Ensure caption is a single line
         caption = caption.replace('\n', ' ').strip()
         return caption
     
     except Exception as e:
         import traceback
         traceback_str = traceback.format_exc()
-        return f"Error processing image: {str(e)}\n{traceback_str}"
+        log_message(f"Error processing image: {str(e)}\n{traceback_str}", level="ERROR")
+        return f"Error processing image: {str(e)}"
 
 def handler(job):
     """
@@ -134,54 +141,54 @@ def handler(job):
     if "image" not in job_input:
         return {"error": "No image provided in input"}
     
-    # Get the prompt (optional, use default if not provided)
     prompt = job_input.get("prompt", "Write a long descriptive caption for this image in a formal tone.")
     max_new_tokens = job_input.get("max_new_tokens", 300)
-    
-    # Handle the image (base64, URL, or file path)
     image_input = job_input["image"]
     
     try:
         # Case 1: Base64 encoded image
         if isinstance(image_input, str) and image_input.startswith("data:image"):
-            # Extract base64 part after the comma
-            base64_data = image_input.split(",")[1]
+            log_message("Detected Base64 image with data URI prefix.", level="INFO")
+            base64_data = image_input.split(",")[1].strip()
             image_data = Image.open(io.BytesIO(base64.b64decode(base64_data)))
         
-        # Case 2: Pure base64 string (without data URI prefix)
+        # Case 2: Pure base64 string
         elif isinstance(image_input, str) and len(image_input) > 100:
+            log_message("Detected pure Base64 image.", level="INFO")
             try:
-                image_data = Image.open(io.BytesIO(base64.b64decode(image_input)))
+                image_data = Image.open(io.BytesIO(base64.b64decode(image_input.strip())))
             except Exception:
-                # If not a valid base64, try as URL or file path
+                log_message("Base64 decoding failed. Trying as URL or file path.", level="WARNING")
                 if image_input.startswith(('http://', 'https://')):
-                    # It's a URL, we need to download it
+                    log_message("Detected URL.", level="INFO")
                     import requests
                     response = requests.get(image_input, stream=True)
-                    response.raise_for_status()  # Will raise an exception for HTTP errors
+                    response.raise_for_status()
                     image_data = Image.open(io.BytesIO(response.content))
                 else:
-                    # Assume it's a file path
+                    log_message("Assuming file path.", level="INFO")
                     image_data = Image.open(image_input)
         
         # Case 3: URL starting with http:// or https://
         elif isinstance(image_input, str) and image_input.startswith(('http://', 'https://')):
-            # It's a URL, we need to download it
+            log_message("Detected URL.", level="INFO")
             import requests
             response = requests.get(image_input, stream=True)
-            response.raise_for_status()  # Will raise an exception for HTTP errors
+            response.raise_for_status()
             image_data = Image.open(io.BytesIO(response.content))
         
         # Case 4: Local file path
         elif isinstance(image_input, str):
-            # Assume it's a file path
+            log_message("Assuming file path.", level="INFO")
             image_data = Image.open(image_input)
         
         else:
             return {"error": "Invalid image format. Please provide a base64 encoded image, URL, or file path."}
         
         # Convert to RGB mode to ensure compatibility
-        image_data = image_data.convert("RGB")
+        if image_data.mode != "RGB":
+            log_message("Converting image to RGB.", level="INFO")
+            image_data = image_data.convert("RGB")
         
         # Process the image to get the caption
         caption = caption_image(image_data, prompt, max_new_tokens)
@@ -194,6 +201,7 @@ def handler(job):
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
+        log_message(f"Error processing image: {str(e)}\n{error_trace}", level="ERROR")
         return {"error": f"Error processing image: {str(e)}", "traceback": error_trace}
 
 # Start the serverless function

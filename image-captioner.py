@@ -13,26 +13,16 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from colorama import init, Fore, Style
 
+# Инициализация colorama
 init(autoreset=True)
 
 # ===== USER MODIFIABLE SETTINGS =====
-# Your RunPod endpoint ID
-ENDPOINT_ID = "YOUR_ENDPOINT_ID"
-
-# Your RunPod API key
-API_KEY = "YOUR_API_KEY"
-
-# Maximum concurrent requests
-MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT", "1"))
-
-# Polling interval in seconds for async requests
-POLLING_INTERVAL = int(os.environ.get("POLLING_INTERVAL", "2"))
-
-# Prompt for image captioning - modify this to change what kind of captions you get
-CAPTION_PROMPT = os.environ.get("CAPTION_PROMPT", "Provide a description of the provided image, writing several sentences and giving a very fleshed out description.")
-
-# Maximum tokens to generate with fallback to default
-MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "512"))
+ENDPOINT_ID         = "YOUR_ENDPOINT_ID"
+API_KEY             = "YOUR_API_KEY"
+MAX_CONCURRENT      = int(os.environ.get("MAX_CONCURRENT", "1"))
+POLLING_INTERVAL    = int(os.environ.get("POLLING_INTERVAL", "2"))
+MAX_TOKENS          = int(os.environ.get("MAX_TOKENS", "512"))
+CAPTION_PROMPT      = os.environ.get("CAPTION_PROMPT", "Write a descriptive caption for this image in a formal tone.")
 
 # =====================================
 
@@ -50,30 +40,28 @@ def log_message(message, level="INFO"):
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='RunPod Image Captioning Client')
-
     parser.add_argument('--image_folder', type=str, required=True, help='Path to folder containing images')
     parser.add_argument('--endpoint_id', type=str, default=ENDPOINT_ID, help=f'RunPod endpoint ID')
     parser.add_argument('--api_key', type=str, default=API_KEY, help='RunPod API key')
     parser.add_argument('--concurrent', type=int, default=MAX_CONCURRENT, help='Maximum number of concurrent requests')
     parser.add_argument('--caption_prompt', type=str, default=CAPTION_PROMPT, help='Prompt for image captioning')
     parser.add_argument('--max_tokens', type=int, default=MAX_TOKENS, help='Maximum tokens to generate')
-    
     return parser.parse_args()
 
 def encode_image_to_base64(image_path):
-    """Load an image and convert it to base64."""
+    """Load an image and convert it to base64 in PNG format."""
     try:
         with Image.open(image_path) as img:
             # Convert to RGB mode if needed
             if img.mode != "RGB":
+                log_message(f"Converting image {image_path} to RGB...", level="INFO")
                 img = img.convert("RGB")
             
-            # Save to bytes buffer
+            # Save to bytes buffer in PNG format
             buffer = BytesIO()
-            img.save(buffer, format="JPEG")
-            
-            # Encode to base64
-            encoded_image = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            img.save(buffer, format="PNG")  # Use PNG to avoid JPEG compression artifacts
+            encoded_image = base64.b64encode(buffer.getvalue()).decode('utf-8').strip()
+            log_message(f"Successfully encoded image {image_path} to Base64.", level="INFO")
             return encoded_image
     except Exception as e:
         log_message(f"Error encoding image {image_path}: {str(e)}", level="ERROR")
@@ -88,9 +76,10 @@ def send_request_sync(image_path, args):
         # Encode image
         base64_image = encode_image_to_base64(image_path)
         if not base64_image:
+            log_message(f"Skipping {image_name} due to encoding error.", level="ERROR")
             return
         
-        # Prepare API request - only send the image
+        # Prepare API request
         url = f"https://api.runpod.ai/v2/{args.endpoint_id}/runsync"
         headers = {
             "Authorization": f"Bearer {args.api_key}",
@@ -105,6 +94,7 @@ def send_request_sync(image_path, args):
         }
         
         # Send request
+        log_message(f"Sending request for {image_name}...", level="INFO")
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
         result = response.json()
