@@ -46,7 +46,28 @@ def parse_arguments():
     parser.add_argument('--concurrent', type=int, default=MAX_CONCURRENT, help='Maximum number of concurrent requests')
     parser.add_argument('--caption_prompt', type=str, default=CAPTION_PROMPT, help='Prompt for image captioning')
     parser.add_argument('--max_tokens', type=int, default=MAX_TOKENS, help='Maximum tokens to generate')
+    parser.add_argument('--recurse', action='store_true', help='Recursively search for images in subdirectories')
     return parser.parse_args()
+
+def find_images_in_directory(directory, recurse=False):
+    """Find all supported image files in the directory and optionally its subdirectories."""
+    supported_formats = ['.jpg', '.jpeg', '.png', '.bmp', '.webp']
+    image_files = []
+
+    if recurse:
+        log_message(f"Recursively searching for images in {directory}...", level="INFO")
+        for root, _, files in os.walk(directory):
+            for file in files:
+                if os.path.splitext(file.lower())[1] in supported_formats:
+                    image_files.append(os.path.join(root, file))
+    else:
+        log_message(f"Searching for images in {directory}...", level="INFO")
+        for file in os.listdir(directory):
+            if os.path.splitext(file.lower())[1] in supported_formats:
+                image_files.append(os.path.join(directory, file))
+
+    log_message(f"Found {len(image_files)} images.", level="INFO")
+    return image_files
 
 def encode_image_to_base64(image_path):
     """Load an image and convert it to base64 in PNG format."""
@@ -123,6 +144,7 @@ def main():
     # Print configuration
     log_message(f"Using endpoint ID: {args.endpoint_id}", level="INFO")
     log_message(f"Max concurrent requests: {args.concurrent}", level="INFO")
+    log_message(f"Recursive search enabled: {args.recurse}", level="INFO")
     
     # Validate arguments
     if args.endpoint_id == "your-endpoint-id-here" or args.api_key == "your-runpod-api-key-here":
@@ -131,18 +153,12 @@ def main():
         log_message("  RUNPOD_ENDPOINT_ID and RUNPOD_API_KEY", level="ERROR")
         sys.exit(1)
     
-    # Get list of image files
-    supported_formats = ['.jpg', '.jpeg', '.png', '.bmp', '.webp']
-    image_files = [
-        os.path.join(args.image_folder, f) for f in os.listdir(args.image_folder)
-        if os.path.splitext(f.lower())[1] in supported_formats
-    ]
+    # Find image files
+    image_files = find_images_in_directory(args.image_folder, recurse=args.recurse)
     
     if not image_files:
         log_message(f"No supported image files found in {args.image_folder}", level="ERROR")
         sys.exit(1)
-    
-    log_message(f"Found {len(image_files)} images to process", level="INFO")
     
     # Process images
     request_fn = send_request_sync
