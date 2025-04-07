@@ -1,3 +1,3 @@
-# JoyCaption-alphatwo-captioner: Quick and easy video and image captioning with JoyCaption Alpha Two
+# RunPod Serverless JoyCaption Alpha Two Captioner
 
 The desctipntion will be here soon... 
