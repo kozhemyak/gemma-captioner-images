@@ -11,7 +11,6 @@ from transformers import AutoProcessor, LlavaForConditionalGeneration
 from datetime import datetime
 from colorama import init, Fore, Style
 
-# Инициализация colorama
 init(autoreset=True)
 
 # ===== USER MODIFIABLE SETTINGS =====
